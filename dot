@@ -461,6 +461,172 @@ cmd_ssh() {
 }
 
 # ============================================================================
+# ADD COMMAND
+# ============================================================================
+cmd_add() {
+    local pkg_type="${1:-}"
+    local pkg_name="${2:-}"
+    
+    if [[ -z "$pkg_type" || -z "$pkg_name" ]]; then
+        error "Usage: dot add <brew|cask> <package>"
+        return 1
+    fi
+    
+    if ! command_exists brew; then
+        error "Homebrew is not installed"
+        return 1
+    fi
+    
+    case "$pkg_type" in
+        brew)
+            # Check if already in Brewfile
+            if grep -q "^brew \"$pkg_name\"$" "$BREWFILE"; then
+                warn "$pkg_name is already in Brewfile"
+            else
+                info "Installing $pkg_name..."
+                if brew install "$pkg_name"; then
+                    success "$pkg_name installed"
+                    
+                    # Add to Brewfile (sorted alphabetically in brew section)
+                    info "Adding $pkg_name to Brewfile..."
+                    add_to_brewfile "brew" "$pkg_name"
+                    success "$pkg_name added to Brewfile"
+                else
+                    error "Failed to install $pkg_name"
+                    return 1
+                fi
+            fi
+            ;;
+        cask)
+            # Check if already in Brewfile
+            if grep -q "^cask \"$pkg_name\"$" "$BREWFILE"; then
+                warn "$pkg_name is already in Brewfile"
+            else
+                info "Installing cask $pkg_name..."
+                if brew install --cask "$pkg_name"; then
+                    success "$pkg_name installed"
+                    
+                    # Add to Brewfile (sorted alphabetically in cask section)
+                    info "Adding $pkg_name to Brewfile..."
+                    add_to_brewfile "cask" "$pkg_name"
+                    success "$pkg_name added to Brewfile"
+                else
+                    error "Failed to install $pkg_name"
+                    return 1
+                fi
+            fi
+            ;;
+        *)
+            error "Unknown package type: $pkg_type (use 'brew' or 'cask')"
+            return 1
+            ;;
+    esac
+}
+
+add_to_brewfile() {
+    local pkg_type="$1"
+    local pkg_name="$2"
+    local temp_file
+    temp_file=$(mktemp)
+    
+    # Extract header (cask_args line)
+    local header
+    header=$(grep "^cask_args" "$BREWFILE" || true)
+    
+    # Extract existing brew and cask entries
+    local brews casks
+    brews=$(grep "^brew " "$BREWFILE" || true)
+    casks=$(grep "^cask " "$BREWFILE" || true)
+    
+    # Add new entry to appropriate list
+    if [[ "$pkg_type" == "brew" ]]; then
+        brews=$(echo -e "$brews\nbrew \"$pkg_name\"" | grep -v "^$" | sort -u)
+    else
+        casks=$(echo -e "$casks\ncask \"$pkg_name\"" | grep -v "^$" | sort -u)
+    fi
+    
+    # Rebuild Brewfile
+    {
+        [[ -n "$header" ]] && echo "$header" && echo ""
+        [[ -n "$brews" ]] && echo "$brews" && echo ""
+        [[ -n "$casks" ]] && echo "$casks"
+    } > "$temp_file"
+    
+    mv "$temp_file" "$BREWFILE"
+}
+
+# ============================================================================
+# REMOVE COMMAND
+# ============================================================================
+cmd_remove() {
+    local pkg_type="${1:-}"
+    local pkg_name="${2:-}"
+    
+    if [[ -z "$pkg_type" || -z "$pkg_name" ]]; then
+        error "Usage: dot remove <brew|cask> <package>"
+        return 1
+    fi
+    
+    if ! command_exists brew; then
+        error "Homebrew is not installed"
+        return 1
+    fi
+    
+    case "$pkg_type" in
+        brew)
+            # Check if in Brewfile
+            if ! grep -q "^brew \"$pkg_name\"$" "$BREWFILE"; then
+                warn "$pkg_name is not in Brewfile"
+            else
+                info "Uninstalling $pkg_name..."
+                if brew uninstall "$pkg_name" 2>/dev/null || true; then
+                    success "$pkg_name uninstalled"
+                fi
+                
+                # Remove from Brewfile
+                info "Removing $pkg_name from Brewfile..."
+                remove_from_brewfile "brew" "$pkg_name"
+                success "$pkg_name removed from Brewfile"
+            fi
+            ;;
+        cask)
+            # Check if in Brewfile
+            if ! grep -q "^cask \"$pkg_name\"$" "$BREWFILE"; then
+                warn "$pkg_name is not in Brewfile"
+            else
+                info "Uninstalling cask $pkg_name..."
+                if brew uninstall --cask "$pkg_name" 2>/dev/null || true; then
+                    success "$pkg_name uninstalled"
+                fi
+                
+                # Remove from Brewfile
+                info "Removing $pkg_name from Brewfile..."
+                remove_from_brewfile "cask" "$pkg_name"
+                success "$pkg_name removed from Brewfile"
+            fi
+            ;;
+        *)
+            error "Unknown package type: $pkg_type (use 'brew' or 'cask')"
+            return 1
+            ;;
+    esac
+}
+
+remove_from_brewfile() {
+    local pkg_type="$1"
+    local pkg_name="$2"
+    local temp_file
+    temp_file=$(mktemp)
+    
+    # Remove the matching line
+    grep -v "^$pkg_type \"$pkg_name\"$" "$BREWFILE" > "$temp_file"
+    
+    # Remove any double blank lines that might result
+    cat -s "$temp_file" > "$BREWFILE"
+    rm -f "$temp_file"
+}
+
+# ============================================================================
 # HELP COMMAND
 # ============================================================================
 cmd_help() {
@@ -470,14 +636,16 @@ dot - Mac dotfiles and setup manager
 Usage: dot <command> [options]
 
 Commands:
-  init         Interactive setup - installs everything step by step
-  doctor       Check installation status and report any issues
-  stow         Stow dotfiles from home/ (backs up existing files)
-  link         Create 'dot' symlink in $BIN_DIR
-  unlink       Remove 'dot' symlink from $BIN_DIR
-  update       Update all Homebrew packages
-  ssh [email]  Generate SSH key and add to macOS keychain
-  help         Show this help message
+  init                  Interactive setup - installs everything step by step
+  doctor                Check installation status and report any issues
+  stow                  Stow dotfiles from home/ (backs up existing files)
+  link                  Create 'dot' symlink in $BIN_DIR
+  unlink                Remove 'dot' symlink from $BIN_DIR
+  update                Update all Homebrew packages
+  add <brew|cask> <pkg> Install package and add to Brewfile
+  remove <brew|cask> <pkg> Uninstall package and remove from Brewfile
+  ssh [email]           Generate SSH key and add to macOS keychain
+  help                  Show this help message
 
 Environment Variables:
   DOT_EMAIL    Default email for SSH key generation
@@ -487,6 +655,10 @@ Examples:
   dot doctor                  # Verify installation
   dot stow                    # Re-stow dotfiles after changes
   dot update                  # Upgrade all packages
+  dot add brew htop           # Install htop and add to Brewfile
+  dot add cask slack          # Install Slack and add to Brewfile
+  dot remove brew htop        # Uninstall htop and remove from Brewfile
+  dot remove cask slack       # Uninstall Slack and remove from Brewfile
   dot ssh                     # Generate SSH key (prompts for email)
   dot ssh user@example.com    # Generate SSH key with email
   DOT_EMAIL=me@example.com dot ssh  # Use env var for email
@@ -518,6 +690,12 @@ main() {
             ;;
         update)
             cmd_update
+            ;;
+        add)
+            cmd_add "${2:-}" "${3:-}"
+            ;;
+        remove)
+            cmd_remove "${2:-}" "${3:-}"
             ;;
         ssh)
             cmd_ssh "${2:-}"
