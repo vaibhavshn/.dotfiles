@@ -1,11 +1,14 @@
 shell-integration = fish
 
 background-blur = true
-background-opacity = 0.98
+background-opacity = 0.97
 
-#background-blur = macos-glass-regular
+# background-blur = macos-glass-regular
 
 font-family = "GeistMono Nerd Font"
+
 theme = light:"Ember Light", dark:"Ember Dark"
 
 adjust-cell-height = 18%
+
+macos-titlebar-style = tabs
