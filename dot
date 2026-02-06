@@ -284,26 +284,37 @@ cmd_doctor() {
 cmd_stow() {
     info "Stowing dotfiles from $HOME_STOW_DIR"
     
-    # Find all files that would be stowed
+    # Find all files that would be stowed (don't follow symlinks)
     local files_to_stow=()
     while IFS= read -r -d '' file; do
         local relative="${file#$HOME_STOW_DIR/}"
         files_to_stow+=("$relative")
-    done < <(find "$HOME_STOW_DIR" -type f -print0)
+    done < <(find -P "$HOME_STOW_DIR" -type f -print0)
     
     # Backup and remove existing files that conflict
     local backed_up=0
     for file in "${files_to_stow[@]}"; do
         local target="$HOME/$file"
-        if [[ -f "$target" && ! -L "$target" ]]; then
+        if [[ -L "$target" ]]; then
+            # Only remove symlinks that point into this dotfiles repo
+            local link_target
+            link_target=$(readlink "$target" 2>/dev/null || true)
+            if [[ "$link_target" == *".dotfiles/home/"* ]]; then
+                rm "$target"
+            fi
+        elif [[ -e "$target" ]]; then
+            # Skip if the resolved path is inside the dotfiles repo (already managed)
+            local resolved_path
+            resolved_path=$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)/$(basename "$target")
+            if [[ "$resolved_path" == "$DOTFILES_DIR/"* ]]; then
+                continue
+            fi
+            # Backup regular files before removing
             info "Backing up ~/$file"
             mkdir -p "$BACKUP_DIR/$(dirname "$file")"
             cp "$target" "$BACKUP_DIR/$file"
             rm "$target"
             backed_up=1
-        elif [[ -L "$target" ]]; then
-            # Remove existing symlink to allow re-stowing
-            rm "$target"
         fi
     done
     
