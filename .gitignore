@@ -1,0 +1,23 @@
+*/**/.undodir
+lazy-lock.json
+home/.config/fish/fish_variables
+home/.config/fish/conf.d/secrets.fish
+home/.config/fish/conf.d/vault-funcs.fish
+home/.config/opencode/amp_stuff/
+.envrc
+*/**/tmux/plugins/*
+backups/
+packages/failed_packages_*.txt
+tmp/
+.DS_STORE
+
+
+# Python
+__pycache__/
+*.pyc
+
+# jj
+.jj
+
+# opencode
+home/.config/opencode/node_modules/

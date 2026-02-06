@@ -1,0 +1,38 @@
+[alias]
+  co = "checkout"
+
+[branch]
+  sort = "-committerdate"
+
+[column]
+  ui = "auto"
+
+[core]
+  editor = "nvim"
+  fsmonitor = true
+
+[fetch]
+  prune = true
+  writeCommitGraph = true
+
+[init]
+  defaultBranch = "main"
+
+[pull]
+  rebase = true
+
+[rebase]
+  updateRefs = true
+
+[rerere]
+  enabled = true
+
+[push]
+  autoSetupRemote = true
+
+[user]
+  email = "vaibhavkshinde20@gmail.com"
+  name = "Vaibhav Shinde"
+
+[includeIf "gitdir:~/work"]
+   path = "~/.config/git/work_config"

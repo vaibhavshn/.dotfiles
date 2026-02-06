@@ -1,0 +1,16 @@
+# command = fish
+# shell-integration = fish
+
+
+background-blur = true
+background-opacity = 0.95
+
+#background-blur = macos-glass-regular
+
+font-family = "GeistMono Nerd Font"
+theme = light:"Bluloco Light", dark:"Xcode Dark"
+# light: Alabaster, Apple System Colors Light, Bluloco Light
+
+#macos-titlebar-style = tabs
+
+adjust-cell-height = 18%

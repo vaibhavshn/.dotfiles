@@ -1,0 +1,537 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Paths
+DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOME_DIR="$HOME"
+BACKUP_DIR="$HOME/.dotfiles_backup/$(date +%Y%m%d_%H%M%S)"
+BREWFILE="$DOTFILES_DIR/packages/Brewfile"
+HOME_STOW_DIR="$DOTFILES_DIR/home"
+BIN_DIR="/usr/local/bin"
+
+# Helper functions
+info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+success() { echo -e "${GREEN}[OK]${NC} $1"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+confirm() {
+    local prompt="$1"
+    local default="${2:-y}"
+    local yn
+    
+    if [[ "$default" == "y" ]]; then
+        prompt="$prompt [Y/n]: "
+    else
+        prompt="$prompt [y/N]: "
+    fi
+    
+    read -r -p "$prompt" yn
+    yn="${yn:-$default}"
+    
+    [[ "$yn" =~ ^[Yy]$ ]]
+}
+
+command_exists() {
+    command -v "$1" &>/dev/null
+}
+
+# ============================================================================
+# INIT COMMAND
+# ============================================================================
+cmd_init() {
+    info "Starting interactive Mac setup..."
+    echo ""
+    
+    # Step 1: Install Homebrew
+    echo -e "${BLUE}=== Step 1: Homebrew ===${NC}"
+    if command_exists brew; then
+        success "Homebrew is already installed"
+    else
+        if confirm "Install Homebrew?"; then
+            info "Installing Homebrew..."
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            
+            # Add brew to PATH for Apple Silicon
+            if [[ -f "/opt/homebrew/bin/brew" ]]; then
+                eval "$(/opt/homebrew/bin/brew shellenv)"
+            fi
+            success "Homebrew installed"
+        else
+            warn "Skipping Homebrew installation"
+        fi
+    fi
+    echo ""
+    
+    # Step 2: Install Homebrew packages
+    echo -e "${BLUE}=== Step 2: Homebrew Packages ===${NC}"
+    if [[ -f "$BREWFILE" ]]; then
+        info "Found Brewfile at: $BREWFILE"
+        echo "Packages to install:"
+        grep -E "^(brew|cask)" "$BREWFILE" | sed 's/^/  /'
+        echo ""
+        
+        if confirm "Install all packages from Brewfile?"; then
+            info "Installing packages..."
+            brew bundle install --file="$BREWFILE"
+            success "Homebrew packages installed"
+        else
+            warn "Skipping Homebrew packages"
+        fi
+    else
+        error "Brewfile not found at $BREWFILE"
+    fi
+    echo ""
+    
+    # Step 3: Install mise tools (bun and node)
+    echo -e "${BLUE}=== Step 3: Mise (bun & node) ===${NC}"
+    if command_exists mise; then
+        success "mise is already installed"
+        
+        if confirm "Install bun@latest and node@lts via mise?"; then
+            info "Installing bun@latest..."
+            mise use -g bun@latest
+            success "bun@latest installed"
+            
+            info "Installing node@lts..."
+            mise use -g node@lts
+            success "node@lts installed"
+        else
+            warn "Skipping mise tools"
+        fi
+    else
+        error "mise is not installed. Install Homebrew packages first."
+    fi
+    echo ""
+    
+    # Step 4: Install opencode
+    echo -e "${BLUE}=== Step 4: OpenCode ===${NC}"
+    if command_exists bun; then
+        if confirm "Install opencode via bun?"; then
+            info "Installing opencode..."
+            bun install -g @anthropics/opencode
+            success "opencode installed"
+        else
+            warn "Skipping opencode"
+        fi
+    else
+        error "bun is not installed. Install mise tools first."
+    fi
+    echo ""
+    
+    # Step 5: Stow dotfiles
+    echo -e "${BLUE}=== Step 5: Stow Dotfiles ===${NC}"
+    if confirm "Stow dotfiles? (will backup existing files)"; then
+        cmd_stow
+    else
+        warn "Skipping dotfile stowing"
+    fi
+    echo ""
+    
+    # Step 6: Link dot command
+    echo -e "${BLUE}=== Step 6: Link dot Command ===${NC}"
+    if confirm "Create global 'dot' symlink?"; then
+        cmd_link
+    else
+        warn "Skipping dot symlink"
+    fi
+    echo ""
+    
+    # Step 7: SSH key setup (optional)
+    echo -e "${BLUE}=== Step 7: SSH Key (Optional) ===${NC}"
+    if confirm "Set up SSH key for GitHub/GitLab?" "n"; then
+        cmd_ssh
+    else
+        warn "Skipping SSH key setup (run 'dot ssh' later if needed)"
+    fi
+    echo ""
+    
+    success "Setup complete! Run 'dot doctor' to verify installation."
+}
+
+# ============================================================================
+# DOCTOR COMMAND
+# ============================================================================
+cmd_doctor() {
+    local has_errors=0
+    
+    info "Checking installation status..."
+    echo ""
+    
+    # Check Homebrew
+    echo "Homebrew:"
+    if command_exists brew; then
+        success "  brew: $(brew --version | head -1)"
+    else
+        error "  brew: not installed"
+        has_errors=1
+    fi
+    
+    # Check brew packages
+    echo ""
+    echo "Homebrew packages:"
+    local brew_packages=(eza fish fzf gh git jq lazygit mise neovim ripgrep starship stow tlrc tree zoxide)
+    for pkg in "${brew_packages[@]}"; do
+        if brew list "$pkg" &>/dev/null; then
+            success "  $pkg: installed"
+        else
+            error "  $pkg: not installed"
+            has_errors=1
+        fi
+    done
+    
+    # Check casks
+    echo ""
+    echo "Homebrew casks:"
+    local casks=(cleanshot font-geist-mono-nerd-font monitorcontrol stats raycast discord)
+    for cask in "${casks[@]}"; do
+        if brew list --cask "$cask" &>/dev/null; then
+            success "  $cask: installed"
+        else
+            error "  $cask: not installed"
+            has_errors=1
+        fi
+    done
+    
+    # Check mise
+    echo ""
+    echo "Mise:"
+    if command_exists mise; then
+        success "  mise: $(mise --version)"
+        
+        # Check bun
+        if mise ls bun &>/dev/null && [[ -n "$(mise ls bun 2>/dev/null | grep -v 'No' || true)" ]]; then
+            success "  bun: $(bun --version 2>/dev/null || echo 'installed')"
+        else
+            error "  bun: not installed via mise"
+            has_errors=1
+        fi
+        
+        # Check node
+        if mise ls node &>/dev/null && [[ -n "$(mise ls node 2>/dev/null | grep -v 'No' || true)" ]]; then
+            success "  node: $(node --version 2>/dev/null || echo 'installed')"
+        else
+            error "  node: not installed via mise"
+            has_errors=1
+        fi
+    else
+        error "  mise: not installed"
+        has_errors=1
+    fi
+    
+    # Check opencode
+    echo ""
+    echo "OpenCode:"
+    if command_exists opencode; then
+        success "  opencode: installed"
+    else
+        error "  opencode: not installed"
+        has_errors=1
+    fi
+    
+    # Check stowed files
+    echo ""
+    echo "Stowed files:"
+    local stow_files=(
+        ".config/fish/config.fish"
+        ".config/ghostty/config"
+        ".config/git/config"
+        ".config/starship.toml"
+        ".local/bin/coffee"
+    )
+    for file in "${stow_files[@]}"; do
+        local target="$HOME/$file"
+        if [[ -L "$target" ]]; then
+            success "  ~/$file: symlinked"
+        elif [[ -f "$target" ]]; then
+            warn "  ~/$file: exists but not symlinked"
+        else
+            error "  ~/$file: missing"
+            has_errors=1
+        fi
+    done
+    
+    # Check dot symlink
+    echo ""
+    echo "Dot CLI:"
+    if [[ -L "$BIN_DIR/dot" ]]; then
+        success "  dot: linked to $BIN_DIR/dot"
+    else
+        warn "  dot: not linked (run 'dot link')"
+    fi
+    
+    echo ""
+    if [[ $has_errors -eq 0 ]]; then
+        success "All checks passed!"
+        return 0
+    else
+        error "Some checks failed. Run 'dot init' to fix."
+        return 1
+    fi
+}
+
+# ============================================================================
+# STOW COMMAND
+# ============================================================================
+cmd_stow() {
+    info "Stowing dotfiles from $HOME_STOW_DIR"
+    
+    # Find all files that would be stowed
+    local files_to_stow=()
+    while IFS= read -r -d '' file; do
+        local relative="${file#$HOME_STOW_DIR/}"
+        files_to_stow+=("$relative")
+    done < <(find "$HOME_STOW_DIR" -type f -print0)
+    
+    # Backup and remove existing files that conflict
+    local backed_up=0
+    for file in "${files_to_stow[@]}"; do
+        local target="$HOME/$file"
+        if [[ -f "$target" && ! -L "$target" ]]; then
+            info "Backing up ~/$file"
+            mkdir -p "$BACKUP_DIR/$(dirname "$file")"
+            cp "$target" "$BACKUP_DIR/$file"
+            rm "$target"
+            backed_up=1
+        elif [[ -L "$target" ]]; then
+            # Remove existing symlink to allow re-stowing
+            rm "$target"
+        fi
+    done
+    
+    if [[ $backed_up -eq 1 ]]; then
+        success "Backup created at: $BACKUP_DIR"
+    fi
+    
+    # Run stow
+    info "Running stow..."
+    cd "$DOTFILES_DIR"
+    stow -v -t "$HOME" home
+    
+    success "Dotfiles stowed successfully"
+}
+
+# ============================================================================
+# LINK COMMAND
+# ============================================================================
+cmd_link() {
+    info "Creating symlink at $BIN_DIR/dot"
+    
+    # Create bin directory if it doesn't exist
+    if [[ ! -d "$BIN_DIR" ]]; then
+        info "Creating $BIN_DIR..."
+        sudo mkdir -p "$BIN_DIR"
+    fi
+    
+    # Remove existing symlink or file
+    if [[ -e "$BIN_DIR/dot" || -L "$BIN_DIR/dot" ]]; then
+        warn "Removing existing $BIN_DIR/dot"
+        sudo rm "$BIN_DIR/dot"
+    fi
+    
+    # Create symlink
+    sudo ln -s "$DOTFILES_DIR/dot" "$BIN_DIR/dot"
+    success "Symlink created: $BIN_DIR/dot -> $DOTFILES_DIR/dot"
+}
+
+# ============================================================================
+# UNLINK COMMAND
+# ============================================================================
+cmd_unlink() {
+    if [[ -L "$BIN_DIR/dot" ]]; then
+        info "Removing symlink at $BIN_DIR/dot"
+        sudo rm "$BIN_DIR/dot"
+        success "Symlink removed"
+    else
+        warn "No symlink found at $BIN_DIR/dot"
+    fi
+}
+
+# ============================================================================
+# UPDATE COMMAND
+# ============================================================================
+cmd_update() {
+    info "Updating Homebrew packages..."
+    
+    if ! command_exists brew; then
+        error "Homebrew is not installed"
+        return 1
+    fi
+    
+    info "Updating Homebrew..."
+    brew update
+    
+    info "Upgrading packages..."
+    brew upgrade
+    
+    info "Upgrading casks..."
+    brew upgrade --cask
+    
+    info "Cleaning up..."
+    brew cleanup
+    
+    success "All packages updated"
+}
+
+# ============================================================================
+# SSH COMMAND
+# ============================================================================
+cmd_ssh() {
+    local email="${1:-$DOT_EMAIL}"
+    local key_path="$HOME/.ssh/id_ed25519"
+    
+    info "Setting up SSH key..."
+    
+    # Check if key already exists
+    if [[ -f "$key_path" ]]; then
+        warn "SSH key already exists at $key_path"
+        if ! confirm "Do you want to use the existing key?" "y"; then
+            error "Aborting. Remove or rename $key_path to generate a new key."
+            return 1
+        fi
+        info "Using existing SSH key"
+    else
+        # Get email if not provided
+        if [[ -z "$email" ]]; then
+            read -r -p "Enter your email for SSH key: " email
+            if [[ -z "$email" ]]; then
+                error "Email is required"
+                return 1
+            fi
+        fi
+        
+        info "Generating new SSH key for $email..."
+        ssh-keygen -t ed25519 -C "$email" -f "$key_path"
+        success "SSH key generated at $key_path"
+    fi
+    
+    # Start ssh-agent if not running
+    info "Starting ssh-agent..."
+    eval "$(ssh-agent -s)"
+    
+    # Create or update SSH config for macOS keychain
+    local ssh_config="$HOME/.ssh/config"
+    local keychain_config="Host *
+  AddKeysToAgent yes
+  UseKeychain yes
+  IdentityFile $key_path"
+    
+    if [[ -f "$ssh_config" ]]; then
+        if grep -q "UseKeychain yes" "$ssh_config"; then
+            info "SSH config already configured for keychain"
+        else
+            info "Adding keychain config to existing SSH config..."
+            echo "" >> "$ssh_config"
+            echo "$keychain_config" >> "$ssh_config"
+            success "Updated $ssh_config"
+        fi
+    else
+        info "Creating SSH config..."
+        mkdir -p "$HOME/.ssh"
+        echo "$keychain_config" > "$ssh_config"
+        chmod 600 "$ssh_config"
+        success "Created $ssh_config"
+    fi
+    
+    # Add key to keychain
+    info "Adding SSH key to macOS keychain..."
+    ssh-add --apple-use-keychain "$key_path"
+    success "SSH key added to keychain"
+    
+    # Display public key
+    echo ""
+    info "Your public key (copy this to GitHub/GitLab):"
+    echo ""
+    cat "${key_path}.pub"
+    echo ""
+    
+    # Offer to copy to clipboard
+    if confirm "Copy public key to clipboard?"; then
+        pbcopy < "${key_path}.pub"
+        success "Public key copied to clipboard"
+    fi
+}
+
+# ============================================================================
+# HELP COMMAND
+# ============================================================================
+cmd_help() {
+    cat <<EOF
+dot - Mac dotfiles and setup manager
+
+Usage: dot <command> [options]
+
+Commands:
+  init         Interactive setup - installs everything step by step
+  doctor       Check installation status and report any issues
+  stow         Stow dotfiles from home/ (backs up existing files)
+  link         Create 'dot' symlink in $BIN_DIR
+  unlink       Remove 'dot' symlink from $BIN_DIR
+  update       Update all Homebrew packages
+  ssh [email]  Generate SSH key and add to macOS keychain
+  help         Show this help message
+
+Environment Variables:
+  DOT_EMAIL    Default email for SSH key generation
+
+Examples:
+  dot init                    # Set up a new Mac
+  dot doctor                  # Verify installation
+  dot stow                    # Re-stow dotfiles after changes
+  dot update                  # Upgrade all packages
+  dot ssh                     # Generate SSH key (prompts for email)
+  dot ssh user@example.com    # Generate SSH key with email
+  DOT_EMAIL=me@example.com dot ssh  # Use env var for email
+
+EOF
+}
+
+# ============================================================================
+# MAIN
+# ============================================================================
+main() {
+    local cmd="${1:-help}"
+    
+    case "$cmd" in
+        init)
+            cmd_init
+            ;;
+        doctor)
+            cmd_doctor
+            ;;
+        stow)
+            cmd_stow
+            ;;
+        link)
+            cmd_link
+            ;;
+        unlink)
+            cmd_unlink
+            ;;
+        update)
+            cmd_update
+            ;;
+        ssh)
+            cmd_ssh "${2:-}"
+            ;;
+        help|--help|-h)
+            cmd_help
+            ;;
+        *)
+            error "Unknown command: $cmd"
+            echo ""
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
