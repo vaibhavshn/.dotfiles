@@ -18,7 +18,7 @@ truncate_to_repo = false
 [git_branch]
 format = "[$symbol$branch]($style) "
 symbol = " "
-truncation_length = 18
+truncation_length = 32
 only_attached = true
 
 [git_status]

@@ -34,5 +34,8 @@
   email = "vaibhavkshinde20@gmail.com"
   name = "Vaibhav Shinde"
 
-[includeIf "gitdir:~/work"]
+[include]
+   path = "~/.config/git/local_config"
+
+[includeIf "gitdir:~/work/"]
    path = "~/.config/git/work_config"

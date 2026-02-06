@@ -21,3 +21,4 @@ __pycache__/
 
 # opencode
 home/.config/opencode/node_modules/
+home/.config/git/local_config
