@@ -2,7 +2,7 @@
   "$schema": "https://opencode.ai/config.json",
   "autoupdate": true,
   "keybinds": {},
-  "theme": "cursor",
+  "theme": "github",
   "permission": {
     "external_directory": {
       "*": "ask",
