@@ -48,6 +48,20 @@ command_exists() {
     command -v "$1" &>/dev/null
 }
 
+# Parse Brewfile to get list of brew packages
+get_brew_packages() {
+    if [[ -f "$BREWFILE" ]]; then
+        grep "^brew " "$BREWFILE" | sed 's/brew "\([^"]*\)".*/\1/' | sort
+    fi
+}
+
+# Parse Brewfile to get list of casks
+get_cask_packages() {
+    if [[ -f "$BREWFILE" ]]; then
+        grep "^cask " "$BREWFILE" | sed 's/cask "\([^"]*\)".*/\1/' | sort
+    fi
+}
+
 # ============================================================================
 # INIT COMMAND
 # ============================================================================
@@ -179,31 +193,37 @@ cmd_doctor() {
         has_errors=1
     fi
     
-    # Check brew packages
+    # Check brew packages (from Brewfile)
     echo ""
     echo "Homebrew packages:"
-    local brew_packages=(eza fish fzf gh git jq lazygit mise neovim ripgrep starship stow tlrc tree zoxide)
-    for pkg in "${brew_packages[@]}"; do
-        if brew list "$pkg" &>/dev/null; then
-            success "  $pkg: installed"
-        else
-            error "  $pkg: not installed"
-            has_errors=1
-        fi
-    done
+    if [[ -f "$BREWFILE" ]]; then
+        while IFS= read -r pkg; do
+            if brew list "$pkg" &>/dev/null; then
+                success "  $pkg: installed"
+            else
+                error "  $pkg: not installed"
+                has_errors=1
+            fi
+        done < <(get_brew_packages)
+    else
+        warn "  Brewfile not found at $BREWFILE"
+    fi
     
-    # Check casks
+    # Check casks (from Brewfile)
     echo ""
     echo "Homebrew casks:"
-    local casks=(cleanshot font-geist-mono-nerd-font monitorcontrol stats raycast discord)
-    for cask in "${casks[@]}"; do
-        if brew list --cask "$cask" &>/dev/null; then
-            success "  $cask: installed"
-        else
-            error "  $cask: not installed"
-            has_errors=1
-        fi
-    done
+    if [[ -f "$BREWFILE" ]]; then
+        while IFS= read -r cask; do
+            if brew list --cask "$cask" &>/dev/null; then
+                success "  $cask: installed"
+            else
+                error "  $cask: not installed"
+                has_errors=1
+            fi
+        done < <(get_cask_packages)
+    else
+        warn "  Brewfile not found at $BREWFILE"
+    fi
     
     # Check mise
     echo ""
