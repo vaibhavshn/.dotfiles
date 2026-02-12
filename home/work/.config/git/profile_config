@@ -3,3 +3,7 @@
 
 [include]
   path = ~/.local/share/cloudflare-warp-certs/gitconfig
+
+[user]
+  email = "vshinde@cloudflare.com"
+  name = "Vaibhav Shinde"

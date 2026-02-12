@@ -36,6 +36,3 @@
 
 [include]
   path = "~/.config/git/profile_config"
-
-[includeIf "gitdir:~/work/"]
-  path = "~/.config/git/work_config"
