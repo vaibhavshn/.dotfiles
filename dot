@@ -16,6 +16,10 @@ BACKUP_DIR="$HOME/.dotfiles_backup/$(date +%Y%m%d_%H%M%S)"
 BREWFILE="$DOTFILES_DIR/packages/Brewfile"
 HOME_STOW_DIR="$DOTFILES_DIR/home"
 BIN_DIR="/usr/local/bin"
+ACTIVE_PROFILE_FILE="$DOTFILES_DIR/.active_profile"
+
+# Stow profiles (work and personal are mutually exclusive)
+STOW_PROFILES=("common" "work" "personal")
 
 # Helper functions
 info() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -237,17 +241,17 @@ cmd_doctor() {
         has_errors=1
     fi
     
-    # Check stowed files
+    # Check stowed files (common profile)
     echo ""
-    echo "Stowed files:"
-    local stow_files=(
+    echo "Stowed files (common):"
+    local common_files=(
         ".config/fish/config.fish"
         ".config/ghostty/config"
         ".config/git/config"
         ".config/starship.toml"
         ".local/bin/coffee"
     )
-    for file in "${stow_files[@]}"; do
+    for file in "${common_files[@]}"; do
         local target="$HOME/$file"
         if [[ -L "$target" ]]; then
             success "  ~/$file: symlinked"
@@ -258,6 +262,17 @@ cmd_doctor() {
             has_errors=1
         fi
     done
+    
+    # Check active profile
+    echo ""
+    echo "Stow profile:"
+    local active_profile
+    active_profile=$(get_active_profile)
+    if [[ -n "$active_profile" ]]; then
+        success "  Active profile: $active_profile"
+    else
+        warn "  No profile active (run 'dot stow' to select)"
+    fi
     
     # Check dot symlink
     echo ""
@@ -281,15 +296,58 @@ cmd_doctor() {
 # ============================================================================
 # STOW COMMAND
 # ============================================================================
-cmd_stow() {
-    info "Stowing dotfiles from $HOME_STOW_DIR"
+
+# Get the currently active profile (work or personal)
+get_active_profile() {
+    if [[ -f "$ACTIVE_PROFILE_FILE" ]]; then
+        cat "$ACTIVE_PROFILE_FILE"
+    else
+        echo ""
+    fi
+}
+
+# Set the active profile
+set_active_profile() {
+    local profile="$1"
+    echo "$profile" > "$ACTIVE_PROFILE_FILE"
+}
+
+# Unstow a profile
+unstow_profile() {
+    local profile="$1"
+    local profile_dir="$HOME_STOW_DIR/$profile"
+    
+    if [[ -d "$profile_dir" ]]; then
+        info "Unstowing $profile..."
+        cd "$DOTFILES_DIR"
+        stow -D -v -t "$HOME" -d "$HOME_STOW_DIR" "$profile" 2>/dev/null || true
+    fi
+}
+
+# Stow a single profile directory
+stow_profile() {
+    local profile="$1"
+    local profile_dir="$HOME_STOW_DIR/$profile"
+    
+    if [[ ! -d "$profile_dir" ]]; then
+        error "Profile directory not found: $profile_dir"
+        return 1
+    fi
+    
+    # Check if profile directory has any files
+    if [[ -z "$(find "$profile_dir" -type f 2>/dev/null)" ]]; then
+        warn "Profile '$profile' is empty, skipping"
+        return 0
+    fi
+    
+    info "Stowing $profile profile from $profile_dir"
     
     # Find all files that would be stowed (don't follow symlinks)
     local files_to_stow=()
     while IFS= read -r -d '' file; do
-        local relative="${file#$HOME_STOW_DIR/}"
+        local relative="${file#$profile_dir/}"
         files_to_stow+=("$relative")
-    done < <(find -P "$HOME_STOW_DIR" -type f -print0)
+    done < <(find -P "$profile_dir" -type f -print0)
     
     # Backup and remove existing files that conflict
     local backed_up=0
@@ -323,11 +381,69 @@ cmd_stow() {
     fi
     
     # Run stow
-    info "Running stow..."
+    info "Running stow for $profile..."
     cd "$DOTFILES_DIR"
-    stow -v -t "$HOME" home
+    stow -v -t "$HOME" -d "$HOME_STOW_DIR" "$profile"
     
-    success "Dotfiles stowed successfully"
+    success "$profile profile stowed successfully"
+}
+
+cmd_stow() {
+    local profile="${1:-}"
+    
+    # If no profile specified, prompt interactively
+    if [[ -z "$profile" ]]; then
+        local current_profile
+        current_profile=$(get_active_profile)
+        
+        echo "Available profiles:"
+        echo "  1) work"
+        echo "  2) personal"
+        if [[ -n "$current_profile" ]]; then
+            echo ""
+            info "Currently active: $current_profile"
+        fi
+        echo ""
+        read -r -p "Select profile (1/2): " choice
+        
+        case "$choice" in
+            1|work)
+                profile="work"
+                ;;
+            2|personal)
+                profile="personal"
+                ;;
+            *)
+                error "Invalid choice. Use 'work' or 'personal'"
+                return 1
+                ;;
+        esac
+    fi
+    
+    # Validate profile
+    if [[ "$profile" != "work" && "$profile" != "personal" ]]; then
+        error "Invalid profile: $profile (use 'work' or 'personal')"
+        return 1
+    fi
+    
+    # Unstow the other profile if active (work and personal are mutually exclusive)
+    local current_profile
+    current_profile=$(get_active_profile)
+    if [[ -n "$current_profile" && "$current_profile" != "$profile" ]]; then
+        info "Switching from $current_profile to $profile..."
+        unstow_profile "$current_profile"
+    fi
+    
+    # Always stow common first
+    stow_profile "common"
+    
+    # Then stow the selected profile
+    stow_profile "$profile"
+    
+    # Save the active profile
+    set_active_profile "$profile"
+    
+    success "All dotfiles stowed with '$profile' profile"
 }
 
 # ============================================================================
@@ -649,7 +765,7 @@ Usage: dot <command> [options]
 Commands:
   init                  Interactive setup - installs everything step by step
   doctor                Check installation status and report any issues
-  stow                  Stow dotfiles from home/ (backs up existing files)
+  stow [profile]        Stow dotfiles (profile: work or personal, prompts if omitted)
   link                  Create 'dot' symlink in $BIN_DIR
   unlink                Remove 'dot' symlink from $BIN_DIR
   update                Update all Homebrew packages
@@ -658,13 +774,20 @@ Commands:
   ssh [email]           Generate SSH key and add to macOS keychain
   help                  Show this help message
 
+Stow Profiles:
+  common                Always applied (fish, ghostty, starship, etc.)
+  work                  Work-specific configs (mutually exclusive with personal)
+  personal              Personal configs (mutually exclusive with work)
+
 Environment Variables:
   DOT_EMAIL    Default email for SSH key generation
 
 Examples:
   dot init                    # Set up a new Mac
   dot doctor                  # Verify installation
-  dot stow                    # Re-stow dotfiles after changes
+  dot stow                    # Stow dotfiles (prompts for profile)
+  dot stow work               # Stow common + work profile
+  dot stow personal           # Stow common + personal profile
   dot update                  # Upgrade all packages
   dot add brew htop           # Install htop and add to Brewfile
   dot add cask slack          # Install Slack and add to Brewfile
@@ -691,7 +814,7 @@ main() {
             cmd_doctor
             ;;
         stow)
-            cmd_stow
+            cmd_stow "${2:-}"
             ;;
         link)
             cmd_link

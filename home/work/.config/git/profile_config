@@ -1,0 +1,5 @@
+# Work profile git config
+# This file is included by the main git config when using the work profile
+
+[include]
+  path = ~/.local/share/cloudflare-warp-certs/gitconfig
