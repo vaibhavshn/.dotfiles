@@ -11,18 +11,14 @@ NC='\033[0m' # No Color
 
 # Paths
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOME_DIR="$HOME"
 BACKUP_DIR="$HOME/.dotfiles_backup/$(date +%Y%m%d_%H%M%S)"
 PACKAGES_DIR="$DOTFILES_DIR/packages"
 BREWFILE="$PACKAGES_DIR/Brewfile"
 BREWFILE_WORK="$PACKAGES_DIR/Brewfile.work"
 BREWFILE_PERSONAL="$PACKAGES_DIR/Brewfile.personal"
 HOME_STOW_DIR="$DOTFILES_DIR/home"
-BIN_DIR="/usr/local/bin"
+BIN_DIR="${DOT_BIN_DIR:-/usr/local/bin}"
 ACTIVE_PROFILE_FILE="$DOTFILES_DIR/.active_profile"
-
-# Stow profiles (work and personal are mutually exclusive)
-STOW_PROFILES=("common" "work" "personal")
 
 # Helper functions
 info() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -49,6 +45,21 @@ confirm() {
 
 command_exists() {
     command -v "$1" &>/dev/null
+}
+
+# Get the currently active profile (work or personal)
+get_active_profile() {
+    if [[ -f "$ACTIVE_PROFILE_FILE" ]]; then
+        cat "$ACTIVE_PROFILE_FILE"
+    else
+        echo ""
+    fi
+}
+
+# Set the active profile
+set_active_profile() {
+    local profile="$1"
+    echo "$profile" > "$ACTIVE_PROFILE_FILE"
 }
 
 # Get the Brewfile path for a profile
@@ -389,6 +400,7 @@ cmd_doctor() {
         ".config/starship.toml"
         ".local/bin/coffee"
     )
+    local file
     for file in "${common_files[@]}"; do
         local target="$HOME/$file"
         if [[ -L "$target" ]]; then
@@ -401,11 +413,9 @@ cmd_doctor() {
         fi
     done
     
-    # Check active profile
+    # Check active profile (reuse active_profile from earlier)
     echo ""
     echo "Stow profile:"
-    local active_profile
-    active_profile=$(get_active_profile)
     if [[ -n "$active_profile" ]]; then
         success "  Active profile: $active_profile"
     else
@@ -434,21 +444,6 @@ cmd_doctor() {
 # ============================================================================
 # STOW COMMAND
 # ============================================================================
-
-# Get the currently active profile (work or personal)
-get_active_profile() {
-    if [[ -f "$ACTIVE_PROFILE_FILE" ]]; then
-        cat "$ACTIVE_PROFILE_FILE"
-    else
-        echo ""
-    fi
-}
-
-# Set the active profile
-set_active_profile() {
-    local profile="$1"
-    echo "$profile" > "$ACTIVE_PROFILE_FILE"
-}
 
 # Unstow a profile
 unstow_profile() {
@@ -702,7 +697,7 @@ cmd_install() {
 # SSH COMMAND
 # ============================================================================
 cmd_ssh() {
-    local email="${1:-$DOT_EMAIL}"
+    local email="${1:-${DOT_EMAIL:-}}"
     local key_path="$HOME/.ssh/id_ed25519"
     
     info "Setting up SSH key..."
@@ -815,13 +810,13 @@ cmd_add() {
             ;;
     esac
     
-    # Check if package exists in any Brewfile
+    # Check if package exists in any Brewfile (use -Fx for literal full-line match)
     local already_exists=""
-    if grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE" 2>/dev/null; then
+    if grep -Fxq "$pkg_type \"$pkg_name\"" "$BREWFILE" 2>/dev/null; then
         already_exists="base Brewfile"
-    elif grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE_WORK" 2>/dev/null; then
+    elif grep -Fxq "$pkg_type \"$pkg_name\"" "$BREWFILE_WORK" 2>/dev/null; then
         already_exists="work Brewfile"
-    elif grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE_PERSONAL" 2>/dev/null; then
+    elif grep -Fxq "$pkg_type \"$pkg_name\"" "$BREWFILE_PERSONAL" 2>/dev/null; then
         already_exists="personal Brewfile"
     fi
     
@@ -870,6 +865,7 @@ add_to_brewfile() {
     local target_file="${3:-$BREWFILE}"
     local temp_file
     temp_file=$(mktemp)
+    trap "rm -f '$temp_file'" RETURN
     
     # Create file if it doesn't exist
     if [[ ! -f "$target_file" ]]; then
@@ -903,6 +899,7 @@ add_to_brewfile() {
     } > "$temp_file"
     
     mv "$temp_file" "$target_file"
+    trap - RETURN  # Clear the trap since we successfully moved the file
 }
 
 # ============================================================================
@@ -922,16 +919,16 @@ cmd_remove() {
         return 1
     fi
     
-    # Find which Brewfile contains the package
+    # Find which Brewfile contains the package (use -Fx for literal full-line match)
     local target_brewfile=""
     local target_profile=""
-    if grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE" 2>/dev/null; then
+    if grep -Fxq "$pkg_type \"$pkg_name\"" "$BREWFILE" 2>/dev/null; then
         target_brewfile="$BREWFILE"
         target_profile="base"
-    elif grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE_WORK" 2>/dev/null; then
+    elif grep -Fxq "$pkg_type \"$pkg_name\"" "$BREWFILE_WORK" 2>/dev/null; then
         target_brewfile="$BREWFILE_WORK"
         target_profile="work"
-    elif grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE_PERSONAL" 2>/dev/null; then
+    elif grep -Fxq "$pkg_type \"$pkg_name\"" "$BREWFILE_PERSONAL" 2>/dev/null; then
         target_brewfile="$BREWFILE_PERSONAL"
         target_profile="personal"
     fi
@@ -973,13 +970,14 @@ remove_from_brewfile() {
     local target_file="${3:-$BREWFILE}"
     local temp_file
     temp_file=$(mktemp)
+    trap "rm -f '$temp_file'" RETURN
     
-    # Remove the matching line
-    grep -v "^$pkg_type \"$pkg_name\"" "$target_file" > "$temp_file" || true
+    # Remove the matching line (use -F for literal matching, -x for full line)
+    grep -Fxv "$pkg_type \"$pkg_name\"" "$target_file" > "$temp_file" || true
     
     # Remove any double blank lines that might result
     cat -s "$temp_file" > "$target_file"
-    rm -f "$temp_file"
+    trap - RETURN  # Clear the trap since we're done
 }
 
 # ============================================================================
