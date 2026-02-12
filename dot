@@ -13,7 +13,10 @@ NC='\033[0m' # No Color
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOME_DIR="$HOME"
 BACKUP_DIR="$HOME/.dotfiles_backup/$(date +%Y%m%d_%H%M%S)"
-BREWFILE="$DOTFILES_DIR/packages/Brewfile"
+PACKAGES_DIR="$DOTFILES_DIR/packages"
+BREWFILE="$PACKAGES_DIR/Brewfile"
+BREWFILE_WORK="$PACKAGES_DIR/Brewfile.work"
+BREWFILE_PERSONAL="$PACKAGES_DIR/Brewfile.personal"
 HOME_STOW_DIR="$DOTFILES_DIR/home"
 BIN_DIR="/usr/local/bin"
 ACTIVE_PROFILE_FILE="$DOTFILES_DIR/.active_profile"
@@ -48,18 +51,62 @@ command_exists() {
     command -v "$1" &>/dev/null
 }
 
-# Parse Brewfile to get list of brew packages
-get_brew_packages() {
-    if [[ -f "$BREWFILE" ]]; then
-        grep "^brew " "$BREWFILE" | sed 's/brew "\([^"]*\)".*/\1/' | sort
+# Get the Brewfile path for a profile
+get_brewfile_for_profile() {
+    local profile="$1"
+    case "$profile" in
+        work)
+            echo "$BREWFILE_WORK"
+            ;;
+        personal)
+            echo "$BREWFILE_PERSONAL"
+            ;;
+        *)
+            echo "$BREWFILE"
+            ;;
+    esac
+}
+
+# Parse a single Brewfile to get list of brew packages
+get_brew_packages_from_file() {
+    local brewfile="$1"
+    if [[ -f "$brewfile" ]]; then
+        grep "^brew " "$brewfile" 2>/dev/null | sed 's/brew "\([^"]*\)".*/\1/' || true
     fi
 }
 
-# Parse Brewfile to get list of casks
-get_cask_packages() {
-    if [[ -f "$BREWFILE" ]]; then
-        grep "^cask " "$BREWFILE" | sed 's/cask "\([^"]*\)".*/\1/' | sort
+# Parse a single Brewfile to get list of casks
+get_cask_packages_from_file() {
+    local brewfile="$1"
+    if [[ -f "$brewfile" ]]; then
+        grep "^cask " "$brewfile" 2>/dev/null | sed 's/cask "\([^"]*\)".*/\1/' || true
     fi
+}
+
+# Get all brew packages for base + active profile
+get_brew_packages() {
+    local profile
+    profile=$(get_active_profile)
+    local profile_brewfile
+    profile_brewfile=$(get_brewfile_for_profile "$profile")
+    
+    {
+        get_brew_packages_from_file "$BREWFILE"
+        [[ -n "$profile" && -f "$profile_brewfile" ]] && get_brew_packages_from_file "$profile_brewfile"
+    } | sort -u
+}
+
+# Get all cask packages for base + active profile
+get_cask_packages() {
+    local profile
+    profile=$(get_active_profile)
+    local profile_brewfile
+    profile_brewfile=$(get_brewfile_for_profile "$profile")
+    
+    {
+        get_cask_packages_from_file "$BREWFILE"
+        [[ -n "$profile" && -f "$profile_brewfile" ]] && get_cask_packages_from_file "$profile_brewfile"
+    } | sort -u
 }
 
 # ============================================================================
@@ -89,20 +136,20 @@ cmd_init() {
     fi
     echo ""
     
-    # Step 2: Install Homebrew packages
-    echo -e "${BLUE}=== Step 2: Homebrew Packages ===${NC}"
+    # Step 2: Install Homebrew packages (base)
+    echo -e "${BLUE}=== Step 2: Homebrew Packages (Base) ===${NC}"
     if [[ -f "$BREWFILE" ]]; then
-        info "Found Brewfile at: $BREWFILE"
-        echo "Packages to install:"
+        info "Found base Brewfile at: $BREWFILE"
+        echo "Base packages to install:"
         grep -E "^(brew|cask)" "$BREWFILE" | sed 's/^/  /'
         echo ""
         
-        if confirm "Install all packages from Brewfile?"; then
-            info "Installing packages..."
+        if confirm "Install base packages from Brewfile?"; then
+            info "Installing base packages..."
             brew bundle install --file="$BREWFILE"
-            success "Homebrew packages installed"
+            success "Base Homebrew packages installed"
         else
-            warn "Skipping Homebrew packages"
+            warn "Skipping base Homebrew packages"
         fi
     else
         error "Brewfile not found at $BREWFILE"
@@ -154,6 +201,31 @@ cmd_init() {
     fi
     echo ""
     
+    # Step 5b: Install profile-specific packages
+    local active_profile
+    active_profile=$(get_active_profile)
+    if [[ -n "$active_profile" ]]; then
+        local profile_brewfile
+        profile_brewfile=$(get_brewfile_for_profile "$active_profile")
+        
+        if [[ -f "$profile_brewfile" ]] && grep -qE "^(brew|cask)" "$profile_brewfile" 2>/dev/null; then
+            echo -e "${BLUE}=== Step 5b: Homebrew Packages ($active_profile profile) ===${NC}"
+            info "Found $active_profile Brewfile at: $profile_brewfile"
+            echo "Profile-specific packages to install:"
+            grep -E "^(brew|cask)" "$profile_brewfile" | sed 's/^/  /'
+            echo ""
+            
+            if confirm "Install $active_profile profile packages?"; then
+                info "Installing $active_profile packages..."
+                brew bundle install --file="$profile_brewfile"
+                success "$active_profile Homebrew packages installed"
+            else
+                warn "Skipping $active_profile Homebrew packages"
+            fi
+            echo ""
+        fi
+    fi
+    
     # Step 6: Link dot command
     echo -e "${BLUE}=== Step 6: Link dot Command ===${NC}"
     if confirm "Create global 'dot' symlink?"; then
@@ -193,36 +265,82 @@ cmd_doctor() {
         has_errors=1
     fi
     
-    # Check brew packages (from Brewfile)
+    # Check brew packages (base Brewfile)
     echo ""
-    echo "Homebrew packages:"
+    echo "Homebrew packages (base):"
     if [[ -f "$BREWFILE" ]]; then
         while IFS= read -r pkg; do
+            [[ -z "$pkg" ]] && continue
             if brew list "$pkg" &>/dev/null; then
                 success "  $pkg: installed"
             else
                 error "  $pkg: not installed"
                 has_errors=1
             fi
-        done < <(get_brew_packages)
+        done < <(get_brew_packages_from_file "$BREWFILE")
     else
         warn "  Brewfile not found at $BREWFILE"
     fi
     
-    # Check casks (from Brewfile)
+    # Check casks (base Brewfile)
     echo ""
-    echo "Homebrew casks:"
+    echo "Homebrew casks (base):"
     if [[ -f "$BREWFILE" ]]; then
         while IFS= read -r cask; do
+            [[ -z "$cask" ]] && continue
             if brew list --cask "$cask" &>/dev/null; then
                 success "  $cask: installed"
             else
                 error "  $cask: not installed"
                 has_errors=1
             fi
-        done < <(get_cask_packages)
+        done < <(get_cask_packages_from_file "$BREWFILE")
     else
         warn "  Brewfile not found at $BREWFILE"
+    fi
+    
+    # Check profile-specific packages
+    local active_profile
+    active_profile=$(get_active_profile)
+    if [[ -n "$active_profile" ]]; then
+        local profile_brewfile
+        profile_brewfile=$(get_brewfile_for_profile "$active_profile")
+        
+        if [[ -f "$profile_brewfile" ]]; then
+            # Check profile brew packages
+            local profile_brews
+            profile_brews=$(get_brew_packages_from_file "$profile_brewfile")
+            if [[ -n "$profile_brews" ]]; then
+                echo ""
+                echo "Homebrew packages ($active_profile):"
+                while IFS= read -r pkg; do
+                    [[ -z "$pkg" ]] && continue
+                    if brew list "$pkg" &>/dev/null; then
+                        success "  $pkg: installed"
+                    else
+                        error "  $pkg: not installed"
+                        has_errors=1
+                    fi
+                done <<< "$profile_brews"
+            fi
+            
+            # Check profile casks
+            local profile_casks
+            profile_casks=$(get_cask_packages_from_file "$profile_brewfile")
+            if [[ -n "$profile_casks" ]]; then
+                echo ""
+                echo "Homebrew casks ($active_profile):"
+                while IFS= read -r cask; do
+                    [[ -z "$cask" ]] && continue
+                    if brew list --cask "$cask" &>/dev/null; then
+                        success "  $cask: installed"
+                    else
+                        error "  $cask: not installed"
+                        has_errors=1
+                    fi
+                done <<< "$profile_casks"
+            fi
+        fi
     fi
     
     # Check mise
@@ -410,34 +528,36 @@ stow_profile() {
 
 cmd_stow() {
     local profile="${1:-}"
+    local current_profile
+    current_profile=$(get_active_profile)
     
-    # If no profile specified, prompt interactively
+    # If no profile specified, use current or prompt
     if [[ -z "$profile" ]]; then
-        local current_profile
-        current_profile=$(get_active_profile)
-        
-        echo "Available profiles:"
-        echo "  1) work"
-        echo "  2) personal"
         if [[ -n "$current_profile" ]]; then
+            # Use existing profile
+            profile="$current_profile"
+            info "Using active profile: $profile"
+        else
+            # No profile set, prompt interactively
+            echo "Available profiles:"
+            echo "  1) work"
+            echo "  2) personal"
             echo ""
-            info "Currently active: $current_profile"
+            read -r -p "Select profile (1/2): " choice
+            
+            case "$choice" in
+                1|work)
+                    profile="work"
+                    ;;
+                2|personal)
+                    profile="personal"
+                    ;;
+                *)
+                    error "Invalid choice. Use 'work' or 'personal'"
+                    return 1
+                    ;;
+            esac
         fi
-        echo ""
-        read -r -p "Select profile (1/2): " choice
-        
-        case "$choice" in
-            1|work)
-                profile="work"
-                ;;
-            2|personal)
-                profile="personal"
-                ;;
-            *)
-                error "Invalid choice. Use 'work' or 'personal'"
-                return 1
-                ;;
-        esac
     fi
     
     # Validate profile
@@ -447,8 +567,6 @@ cmd_stow() {
     fi
     
     # Unstow the other profile if active (work and personal are mutually exclusive)
-    local current_profile
-    current_profile=$(get_active_profile)
     if [[ -n "$current_profile" && "$current_profile" != "$profile" ]]; then
         info "Switching from $current_profile to $profile..."
         unstow_profile "$current_profile"
@@ -526,6 +644,58 @@ cmd_update() {
     brew cleanup
     
     success "All packages updated"
+}
+
+# ============================================================================
+# INSTALL COMMAND
+# ============================================================================
+cmd_install() {
+    if ! command_exists brew; then
+        error "Homebrew is not installed"
+        return 1
+    fi
+    
+    local active_profile
+    active_profile=$(get_active_profile)
+    
+    # Install base packages
+    if [[ -f "$BREWFILE" ]]; then
+        info "Installing packages from base Brewfile..."
+        local base_packages
+        base_packages=$(grep -E "^(brew|cask) " "$BREWFILE" || true)
+        if [[ -n "$base_packages" ]]; then
+            echo "Packages:"
+            echo "$base_packages" | sed 's/^/  /'
+            echo ""
+            brew bundle install --file="$BREWFILE"
+            success "Base packages installed"
+        else
+            warn "No packages in base Brewfile"
+        fi
+    else
+        error "Base Brewfile not found at $BREWFILE"
+        return 1
+    fi
+    
+    # Install profile-specific packages
+    if [[ -n "$active_profile" ]]; then
+        local profile_brewfile
+        profile_brewfile=$(get_brewfile_for_profile "$active_profile")
+        
+        if [[ -f "$profile_brewfile" ]] && grep -qE "^(brew|cask)" "$profile_brewfile" 2>/dev/null; then
+            echo ""
+            info "Installing packages from $active_profile Brewfile..."
+            echo "Packages:"
+            grep -E "^(brew|cask)" "$profile_brewfile" | sed 's/^/  /'
+            echo ""
+            brew bundle install --file="$profile_brewfile"
+            success "$active_profile packages installed"
+        fi
+    else
+        warn "No active profile set. Run 'dot stow' to select a profile for profile-specific packages."
+    fi
+    
+    success "All packages installed"
 }
 
 # ============================================================================
@@ -613,9 +783,11 @@ cmd_ssh() {
 cmd_add() {
     local pkg_type="${1:-}"
     local pkg_name="${2:-}"
+    local target_profile="${3:-}"
     
     if [[ -z "$pkg_type" || -z "$pkg_name" ]]; then
-        error "Usage: dot add <brew|cask> <package>"
+        error "Usage: dot add <brew|cask> <package> [profile]"
+        echo "  profile: base (default), work, or personal"
         return 1
     fi
     
@@ -624,43 +796,65 @@ cmd_add() {
         return 1
     fi
     
+    # Determine target Brewfile
+    local target_brewfile
+    case "$target_profile" in
+        work)
+            target_brewfile="$BREWFILE_WORK"
+            ;;
+        personal)
+            target_brewfile="$BREWFILE_PERSONAL"
+            ;;
+        base|"")
+            target_brewfile="$BREWFILE"
+            target_profile="base"
+            ;;
+        *)
+            error "Unknown profile: $target_profile (use 'base', 'work', or 'personal')"
+            return 1
+            ;;
+    esac
+    
+    # Check if package exists in any Brewfile
+    local already_exists=""
+    if grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE" 2>/dev/null; then
+        already_exists="base Brewfile"
+    elif grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE_WORK" 2>/dev/null; then
+        already_exists="work Brewfile"
+    elif grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE_PERSONAL" 2>/dev/null; then
+        already_exists="personal Brewfile"
+    fi
+    
+    if [[ -n "$already_exists" ]]; then
+        warn "$pkg_name is already in $already_exists"
+        return 0
+    fi
+    
     case "$pkg_type" in
         brew)
-            # Check if already in Brewfile
-            if grep -q "^brew \"$pkg_name\"$" "$BREWFILE"; then
-                warn "$pkg_name is already in Brewfile"
+            info "Installing $pkg_name..."
+            if brew install "$pkg_name"; then
+                success "$pkg_name installed"
+                
+                info "Adding $pkg_name to $target_profile Brewfile..."
+                add_to_brewfile "brew" "$pkg_name" "$target_brewfile"
+                success "$pkg_name added to $target_profile Brewfile"
             else
-                info "Installing $pkg_name..."
-                if brew install "$pkg_name"; then
-                    success "$pkg_name installed"
-                    
-                    # Add to Brewfile (sorted alphabetically in brew section)
-                    info "Adding $pkg_name to Brewfile..."
-                    add_to_brewfile "brew" "$pkg_name"
-                    success "$pkg_name added to Brewfile"
-                else
-                    error "Failed to install $pkg_name"
-                    return 1
-                fi
+                error "Failed to install $pkg_name"
+                return 1
             fi
             ;;
         cask)
-            # Check if already in Brewfile
-            if grep -q "^cask \"$pkg_name\"$" "$BREWFILE"; then
-                warn "$pkg_name is already in Brewfile"
+            info "Installing cask $pkg_name..."
+            if brew install --cask "$pkg_name"; then
+                success "$pkg_name installed"
+                
+                info "Adding $pkg_name to $target_profile Brewfile..."
+                add_to_brewfile "cask" "$pkg_name" "$target_brewfile"
+                success "$pkg_name added to $target_profile Brewfile"
             else
-                info "Installing cask $pkg_name..."
-                if brew install --cask "$pkg_name"; then
-                    success "$pkg_name installed"
-                    
-                    # Add to Brewfile (sorted alphabetically in cask section)
-                    info "Adding $pkg_name to Brewfile..."
-                    add_to_brewfile "cask" "$pkg_name"
-                    success "$pkg_name added to Brewfile"
-                else
-                    error "Failed to install $pkg_name"
-                    return 1
-                fi
+                error "Failed to install $pkg_name"
+                return 1
             fi
             ;;
         *)
@@ -673,17 +867,25 @@ cmd_add() {
 add_to_brewfile() {
     local pkg_type="$1"
     local pkg_name="$2"
+    local target_file="${3:-$BREWFILE}"
     local temp_file
     temp_file=$(mktemp)
     
-    # Extract header (cask_args line)
-    local header
-    header=$(grep "^cask_args" "$BREWFILE" || true)
+    # Create file if it doesn't exist
+    if [[ ! -f "$target_file" ]]; then
+        touch "$target_file"
+    fi
+    
+    # Extract header (cask_args line) - only for base Brewfile
+    local header=""
+    if [[ "$target_file" == "$BREWFILE" ]]; then
+        header=$(grep "^cask_args" "$target_file" || true)
+    fi
     
     # Extract existing brew and cask entries
     local brews casks
-    brews=$(grep "^brew " "$BREWFILE" || true)
-    casks=$(grep "^cask " "$BREWFILE" || true)
+    brews=$(grep "^brew " "$target_file" 2>/dev/null || true)
+    casks=$(grep "^cask " "$target_file" 2>/dev/null || true)
     
     # Add new entry to appropriate list
     if [[ "$pkg_type" == "brew" ]]; then
@@ -695,11 +897,12 @@ add_to_brewfile() {
     # Rebuild Brewfile
     {
         [[ -n "$header" ]] && echo "$header" && echo ""
-        [[ -n "$brews" ]] && echo "$brews" && echo ""
+        [[ -n "$brews" ]] && echo "$brews"
+        [[ -n "$brews" && -n "$casks" ]] && echo ""
         [[ -n "$casks" ]] && echo "$casks"
     } > "$temp_file"
     
-    mv "$temp_file" "$BREWFILE"
+    mv "$temp_file" "$target_file"
 }
 
 # ============================================================================
@@ -719,38 +922,43 @@ cmd_remove() {
         return 1
     fi
     
+    # Find which Brewfile contains the package
+    local target_brewfile=""
+    local target_profile=""
+    if grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE" 2>/dev/null; then
+        target_brewfile="$BREWFILE"
+        target_profile="base"
+    elif grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE_WORK" 2>/dev/null; then
+        target_brewfile="$BREWFILE_WORK"
+        target_profile="work"
+    elif grep -q "^$pkg_type \"$pkg_name\"" "$BREWFILE_PERSONAL" 2>/dev/null; then
+        target_brewfile="$BREWFILE_PERSONAL"
+        target_profile="personal"
+    fi
+    
+    if [[ -z "$target_brewfile" ]]; then
+        warn "$pkg_name is not in any Brewfile"
+        return 0
+    fi
+    
     case "$pkg_type" in
         brew)
-            # Check if in Brewfile
-            if ! grep -q "^brew \"$pkg_name\"$" "$BREWFILE"; then
-                warn "$pkg_name is not in Brewfile"
-            else
-                info "Uninstalling $pkg_name..."
-                if brew uninstall "$pkg_name" 2>/dev/null || true; then
-                    success "$pkg_name uninstalled"
-                fi
-                
-                # Remove from Brewfile
-                info "Removing $pkg_name from Brewfile..."
-                remove_from_brewfile "brew" "$pkg_name"
-                success "$pkg_name removed from Brewfile"
-            fi
+            info "Uninstalling $pkg_name..."
+            brew uninstall "$pkg_name" 2>/dev/null || true
+            success "$pkg_name uninstalled"
+            
+            info "Removing $pkg_name from $target_profile Brewfile..."
+            remove_from_brewfile "brew" "$pkg_name" "$target_brewfile"
+            success "$pkg_name removed from $target_profile Brewfile"
             ;;
         cask)
-            # Check if in Brewfile
-            if ! grep -q "^cask \"$pkg_name\"$" "$BREWFILE"; then
-                warn "$pkg_name is not in Brewfile"
-            else
-                info "Uninstalling cask $pkg_name..."
-                if brew uninstall --cask "$pkg_name" 2>/dev/null || true; then
-                    success "$pkg_name uninstalled"
-                fi
-                
-                # Remove from Brewfile
-                info "Removing $pkg_name from Brewfile..."
-                remove_from_brewfile "cask" "$pkg_name"
-                success "$pkg_name removed from Brewfile"
-            fi
+            info "Uninstalling cask $pkg_name..."
+            brew uninstall --cask "$pkg_name" 2>/dev/null || true
+            success "$pkg_name uninstalled"
+            
+            info "Removing $pkg_name from $target_profile Brewfile..."
+            remove_from_brewfile "cask" "$pkg_name" "$target_brewfile"
+            success "$pkg_name removed from $target_profile Brewfile"
             ;;
         *)
             error "Unknown package type: $pkg_type (use 'brew' or 'cask')"
@@ -762,14 +970,15 @@ cmd_remove() {
 remove_from_brewfile() {
     local pkg_type="$1"
     local pkg_name="$2"
+    local target_file="${3:-$BREWFILE}"
     local temp_file
     temp_file=$(mktemp)
     
     # Remove the matching line
-    grep -v "^$pkg_type \"$pkg_name\"$" "$BREWFILE" > "$temp_file"
+    grep -v "^$pkg_type \"$pkg_name\"" "$target_file" > "$temp_file" || true
     
     # Remove any double blank lines that might result
-    cat -s "$temp_file" > "$BREWFILE"
+    cat -s "$temp_file" > "$target_file"
     rm -f "$temp_file"
 }
 
@@ -785,19 +994,26 @@ Usage: dot <command> [options]
 Commands:
   init                  Interactive setup - installs everything step by step
   doctor                Check installation status and report any issues
-  stow [profile]        Stow dotfiles (profile: work or personal, prompts if omitted)
+  stow [profile]        Stow dotfiles (uses active profile, or prompts if none)
   link                  Create 'dot' symlink in $BIN_DIR
   unlink                Remove 'dot' symlink from $BIN_DIR
+  install               Install packages from Brewfiles (base + active profile)
   update                Update all Homebrew packages
-  add <brew|cask> <pkg> Install package and add to Brewfile
-  remove <brew|cask> <pkg> Uninstall package and remove from Brewfile
+  add <brew|cask> <pkg> [profile]   Install package and add to Brewfile
+  remove <brew|cask> <pkg>          Uninstall package and remove from Brewfile
   ssh [email]           Generate SSH key and add to macOS keychain
   help                  Show this help message
 
-Stow Profiles:
-  common                Always applied (fish, ghostty, starship, etc.)
-  work                  Work-specific configs (mutually exclusive with personal)
-  personal              Personal configs (mutually exclusive with work)
+Profiles:
+  Dotfiles (home/):
+    common              Always applied (fish, ghostty, starship, etc.)
+    work                Work-specific configs (mutually exclusive with personal)
+    personal            Personal configs (mutually exclusive with work)
+
+  Brewfiles (packages/):
+    Brewfile            Base packages (always installed)
+    Brewfile.work       Work-specific packages
+    Brewfile.personal   Personal-specific packages
 
 Environment Variables:
   DOT_EMAIL    Default email for SSH key generation
@@ -805,17 +1021,18 @@ Environment Variables:
 Examples:
   dot init                    # Set up a new Mac
   dot doctor                  # Verify installation
-  dot stow                    # Stow dotfiles (prompts for profile)
+  dot stow                    # Stow dotfiles (uses active profile or prompts)
   dot stow work               # Stow common + work profile
   dot stow personal           # Stow common + personal profile
+  dot install                 # Install all packages from Brewfiles
   dot update                  # Upgrade all packages
-  dot add brew htop           # Install htop and add to Brewfile
-  dot add cask slack          # Install Slack and add to Brewfile
-  dot remove brew htop        # Uninstall htop and remove from Brewfile
-  dot remove cask slack       # Uninstall Slack and remove from Brewfile
+  dot add brew htop           # Install htop to base Brewfile
+  dot add brew kubectl work   # Install kubectl to work Brewfile
+  dot add cask slack personal # Install Slack to personal Brewfile
+  dot remove brew htop        # Uninstall htop (auto-detects Brewfile)
+  dot remove cask slack       # Uninstall Slack (auto-detects Brewfile)
   dot ssh                     # Generate SSH key (prompts for email)
   dot ssh user@example.com    # Generate SSH key with email
-  DOT_EMAIL=me@example.com dot ssh  # Use env var for email
 
 EOF
 }
@@ -842,11 +1059,14 @@ main() {
         unlink)
             cmd_unlink
             ;;
+        install)
+            cmd_install
+            ;;
         update)
             cmd_update
             ;;
         add)
-            cmd_add "${2:-}" "${3:-}"
+            cmd_add "${2:-}" "${3:-}" "${4:-}"
             ;;
         remove)
             cmd_remove "${2:-}" "${3:-}"

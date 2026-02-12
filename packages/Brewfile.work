@@ -1,0 +1,6 @@
+# Work-specific Homebrew packages
+# These are installed in addition to the base Brewfile when using work profile
+
+brew "glab"
+
+cask "discord"

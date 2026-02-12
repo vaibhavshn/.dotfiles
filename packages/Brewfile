@@ -17,7 +17,6 @@ brew "tree"
 brew "zoxide"
 
 cask "cleanshot"
-cask "discord"
 cask "font-geist-mono-nerd-font"
 cask "monitorcontrol"
 cask "raycast"
